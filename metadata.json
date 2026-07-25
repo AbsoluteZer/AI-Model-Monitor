@@ -1,0 +1,6 @@
+{
+  "name": "AI Model Monitor",
+  "description": "Automated real-time monitoring, benchmark tracking, weighted ranking engine, and comparison platform for state-of-the-art AI models.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
