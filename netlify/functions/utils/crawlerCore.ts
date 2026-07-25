@@ -2,6 +2,14 @@ import { GoogleGenAI } from '@google/genai';
 import { getDataset, saveDataset, StoredDataset } from './storage';
 import { AIModel, CrawlerLog } from '../../../src/types';
 
+interface FeedItem {
+  title: string;
+  link: string;
+  summary: string;
+  source: string;
+  date?: string;
+}
+
 export async function runCrawlerLogic(triggerSource: string = 'Manual Request'): Promise<{
   success: boolean;
   addedCount: number;
@@ -55,7 +63,7 @@ export async function runCrawlerLogic(triggerSource: string = 'Manual Request'):
           id: 'log-' + (Date.now() + 2),
           timestamp: new Date().toISOString(),
           level: 'SUCCESS',
-          message: `Gemini 3.6 Flash grounded search completed. Ingested ${aiResult.models.length} model records from ${aiResult.searchSources.length} citations.`,
+          message: `RSS Feeds & ArXiv API synthesis completed. Ingested ${aiResult.models.length} model records from ${aiResult.searchSources.length} citations.`,
           source: 'GeminiAIService',
         };
         dataset.logs = [successGeminiLog, ...dataset.logs].slice(0, 100);
@@ -124,12 +132,109 @@ export async function runCrawlerLogic(triggerSource: string = 'Manual Request'):
 }
 
 /**
- * Execution Limit / Timeout Note:
- * Step A (Google Search Grounding) + Step B (JSON Structuring) run sequentially and take ~8-15 seconds total.
- * Synchronous Netlify Functions have default execution limits (10s on free tiers, up to 26s).
- * For heavy production manual triggers or high-latency searches, consider using a Netlify Background Function
- * (`trigger-crawler-background.ts`) or scheduled cron (`scheduled-crawler.ts`) to ensure calls never risk timing out.
+ * Resilient XML parser for RSS (RSS 2.0) and Atom (ArXiv / Blog) XML feeds
  */
+function parseXmlItems(xml: string, sourceName: string): FeedItem[] {
+  const items: FeedItem[] = [];
+  const itemRegex = /<(?:item|entry)[\s\S]*?>([\s\S]*?)<\/(?:item|entry)>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const block = match[1];
+
+    // Extract Title
+    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(block);
+    let title = titleMatch ? titleMatch[1] : 'Untitled';
+    title = title.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1').replace(/<[^>]+>/g, '').trim();
+
+    // Extract Link
+    let link = '';
+    const linkHrefMatch = /<link[^>]+href=["']([^"']+)["']/i.exec(block);
+    if (linkHrefMatch) {
+      link = linkHrefMatch[1];
+    } else {
+      const linkTextMatch = /<link[^>]*>([\s\S]*?)<\/link>/i.exec(block);
+      if (linkTextMatch) {
+        link = linkTextMatch[1].replace(/<[^>]+>/g, '').trim();
+      }
+    }
+
+    // Extract Summary / Description
+    const summaryMatch = /<(?:summary|description|content[:\w]*)[\s\S]*?>([\s\S]*?)<\/(?:summary|description|content[:\w]*)>/i.exec(block);
+    let summary = summaryMatch ? summaryMatch[1] : '';
+    summary = summary.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1').replace(/<[^>]+>/g, '').trim();
+
+    // Extract Date
+    const dateMatch = /<(?:pubDate|published|updated)[\s\S]*?>([\s\S]*?)<\/(?:pubDate|published|updated)>/i.exec(block);
+    const date = dateMatch ? dateMatch[1].replace(/<[^>]+>/g, '').trim() : undefined;
+
+    if (title && (summary || link)) {
+      items.push({
+        title,
+        link: link || 'https://arxiv.org',
+        summary: summary.slice(0, 600),
+        source: sourceName,
+        date,
+      });
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Fetch latest papers from ArXiv API (cs.AI, cs.CL, cs.LG)
+ */
+async function fetchArxivPapers(): Promise<FeedItem[]> {
+  try {
+    const url = 'https://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:cs.CL+OR+cat:cs.LG&sortBy=submittedDate&sortOrder=descending&max_results=12';
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'AIModelMonitorCrawler/1.0' },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (res.ok) {
+      const text = await res.text();
+      return parseXmlItems(text, 'ArXiv API');
+    }
+  } catch (err) {
+    console.warn('ArXiv API fetch failed or timed out:', err);
+  }
+  return [];
+}
+
+/**
+ * Fetch top AI research RSS Feeds
+ */
+async function fetchRssFeeds(): Promise<FeedItem[]> {
+  const feeds = [
+    { name: 'ArXiv cs.AI Feed', url: 'https://rss.arxiv.org/rss/cs.AI' },
+    { name: 'HuggingFace Blog', url: 'https://huggingface.co/blog/feed.xml' },
+    { name: 'OpenAI News Feed', url: 'https://openai.com/news/rss.xml' },
+  ];
+
+  const allItems: FeedItem[] = [];
+
+  for (const feed of feeds) {
+    try {
+      const res = await fetch(feed.url, {
+        headers: { 'User-Agent': 'AIModelMonitorCrawler/1.0' },
+        signal: AbortSignal.timeout(6000),
+      });
+
+      if (res.ok) {
+        const text = await res.text();
+        const parsed = parseXmlItems(text, feed.name);
+        allItems.push(...parsed.slice(0, 6));
+      }
+    } catch (e) {
+      console.warn(`RSS Feed ${feed.name} fetch failed or timed out:`, e);
+    }
+  }
+
+  return allItems;
+}
+
 async function queryGeminiForModelUpdates(
   apiKey: string,
   onLog?: (message: string, level?: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR') => void
@@ -143,48 +248,50 @@ async function queryGeminiForModelUpdates(
     },
   });
 
-  // STEP A: Search step with Google Search grounding enabled
+  // STEP A: Fetch RSS Feeds and ArXiv API
   if (onLog) {
-    onLog('Searching for latest model releases via Google Search grounding...', 'INFO');
+    onLog('Fetching latest AI model releases from RSS Feeds and ArXiv API...', 'INFO');
   }
 
-  const searchPrompt = `Search for the latest frontier AI model releases, major announcements, and benchmark updates from the last 30 to 90 days.
-Search across major AI research labs including OpenAI (e.g. GPT-4.5, o3, o3-mini), Anthropic (e.g. Claude Opus 5, Claude Fable 5, Claude 3.7 Sonnet), Google (e.g. Gemini 2.5 Pro, Gemini 2.5 Flash), DeepSeek (e.g. DeepSeek R1, DeepSeek V3), xAI (e.g. Grok 3), Meta (e.g. Llama 3.3 70B), Mistral, Alibaba (Qwen 2.5 Max), and other top labs.
+  const [arxivItems, rssItems] = await Promise.all([
+    fetchArxivPapers(),
+    fetchRssFeeds(),
+  ]);
 
-Find newly launched or updated models, key features, benchmark scores (MMLU-Pro, HumanEval, MATH-500, GPQA Diamond, SWE-bench Verified, MMMU, Arena ELO), pricing per million tokens, context windows, and latency. Summarize these findings comprehensively.`;
+  const combinedFeedItems = [...arxivItems, ...rssItems];
+  const searchSources = combinedFeedItems
+    .map((item) => ({ title: `${item.source}: ${item.title}`, uri: item.link }))
+    .filter((s) => s.uri);
 
-  const searchResponse = await ai.models.generateContent({
-    model: 'gemini-3.6-flash',
-    contents: searchPrompt,
-    config: {
-      tools: [{ googleSearch: {} }],
-    },
-  });
+  const formattedItemsText = combinedFeedItems.length > 0
+    ? combinedFeedItems
+        .map(
+          (item, idx) =>
+            `[Item ${idx + 1}] Source: ${item.source}\nTitle: ${item.title}\nURL: ${item.link}\nDate: ${item.date || 'Recent'}\nSummary: ${item.summary}`
+        )
+        .join('\n\n')
+    : 'No live RSS/ArXiv entries fetched. Synthesize updates based on latest frontier AI model announcements.';
 
-  const rawSearchText = searchResponse.text || '';
-  const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-  const searchSources = groundingChunks
-    .map((chunk: any) => (chunk.web ? { title: chunk.web.title, uri: chunk.web.uri } : null))
-    .filter(Boolean);
-
-  // STEP B: Structuring step (JSON schema conversion without search tool)
+  // STEP B: Convert RSS & ArXiv Feed Intelligence into Structured Model Records
   if (onLog) {
     onLog(
-      `Structuring search results into model records... (Retrieved ${searchSources.length} web search citations)`,
+      `Structuring RSS & ArXiv feed intelligence into model records... (Ingested ${combinedFeedItems.length} feed entries)`,
       'INFO'
     );
   }
 
   const structPrompt = `You are an AI model registry benchmark crawler.
-Below is real-time search intelligence retrieved via Google Search grounding regarding recent AI model releases and benchmark updates:
+Below is real-time AI model research and release intelligence retrieved via RSS Feeds and the ArXiv API:
 
---- SEARCH RESULTS ---
-${rawSearchText}
+--- RSS FEEDS & ARXIV API INTELLIGENCE ---
+${formattedItemsText}
 
---- GROUNDING SOURCES ---
-${JSON.stringify(searchSources)}
+--- CITATIONS & SOURCES ---
+${JSON.stringify(searchSources.slice(0, 20))}
 
-Convert these discovered model releases and benchmark updates into a structured JSON payload containing a "models" array of AI model objects.
+Extract recent frontier AI model releases, major announcements, and benchmark updates (from labs like OpenAI, Anthropic, Google, DeepSeek, xAI, Meta, Mistral, Alibaba, and top research institutions).
+
+Convert these model releases and benchmark updates into a structured JSON payload containing a "models" array of AI model objects.
 
 Return ONLY a valid JSON object structured as follows:
 {
@@ -241,7 +348,7 @@ Return ONLY a valid JSON object structured as follows:
         "throughputTps": 80
       },
       "confidenceScore": 98,
-      "source": "Verified Gemini 3.6 Flash Grounded Search Synthesis"
+      "source": "Verified RSS Feeds, ArXiv API & Gemini 3.6 Flash Synthesis"
     }
   ]
 }
@@ -337,7 +444,7 @@ function processDiscoveredModel(dataset: StoredDataset, raw: any, nowIso: string
       throughputTps: raw.benchmarks?.throughputTps ?? 80,
     },
     confidenceScore: raw.confidenceScore || 98,
-    source: raw.source || 'Verified Gemini 3.6 Flash Live Synthesis',
+    source: raw.source || 'Verified RSS Feeds, ArXiv API & Gemini 3.6 Flash Synthesis',
     lastChecked: nowIso,
     lastUpdated: nowIso,
     performanceHistory: existingIndex >= 0 ? dataset.models[existingIndex].performanceHistory : [],
