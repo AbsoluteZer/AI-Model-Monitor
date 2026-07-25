@@ -31,6 +31,20 @@ export interface StoredDataset {
 // In-memory fallback for local dev when Blobs context is unavailable
 let memoryDataset: StoredDataset | null = null;
 
+// Creates the Blobs store. Prefers Netlify's auto-injected context, but falls
+// back to explicit siteID/token when that auto-injection isn't available in
+// this deploy environment (see MissingBlobsEnvironmentError).
+function getAiMonitorStore() {
+  const siteID = process.env.NETLIFY_SITE_ID;
+  const token = process.env.NETLIFY_BLOBS_TOKEN;
+
+  if (siteID && token) {
+    return getStore({ name: 'aimonitor', consistency: 'strong', siteID, token });
+  }
+
+  return getStore({ name: 'aimonitor', consistency: 'strong' });
+}
+
 function getInitialDataset(): StoredDataset {
   return {
     models: INITIAL_MODELS,
@@ -45,7 +59,7 @@ function getInitialDataset(): StoredDataset {
 
 export async function getDataset(): Promise<StoredDataset> {
   try {
-    const store = getStore({ name: 'aimonitor', consistency: 'strong' });
+    const store = getAiMonitorStore();
     const data = (await store.get('dataset', { type: 'json' })) as StoredDataset | null;
     if (data && data.models && Array.isArray(data.models) && data.models.length > 0) {
       memoryDataset = data;
@@ -66,7 +80,7 @@ export async function getDataset(): Promise<StoredDataset> {
 export async function saveDataset(dataset: StoredDataset): Promise<void> {
   memoryDataset = dataset;
   try {
-    const store = getStore({ name: 'aimonitor', consistency: 'strong' });
+    const store = getAiMonitorStore();
     await store.setJSON('dataset', dataset);
   } catch (err: any) {
     console.warn('Netlify Blobs WRITE failed:', err?.name, err?.message || err);
