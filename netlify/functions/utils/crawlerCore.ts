@@ -30,16 +30,18 @@ export async function runCrawlerLogic(triggerSource: string = 'Manual Request'):
 
   if (apiKey) {
     try {
-      const geminiLog: CrawlerLog = {
-        id: 'log-' + (Date.now() + 1),
-        timestamp: new Date().toISOString(),
-        level: 'INFO',
-        message: 'Executing Gemini 3.6 Flash benchmark synthesis and frontier model release radar...',
-        source: 'GeminiAIService',
+      const onLog = (message: string, level: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR' = 'INFO') => {
+        const log: CrawlerLog = {
+          id: 'log-' + (Date.now() + Math.floor(Math.random() * 1000)),
+          timestamp: new Date().toISOString(),
+          level,
+          message,
+          source: 'GeminiAIService',
+        };
+        dataset.logs = [log, ...dataset.logs].slice(0, 100);
       };
-      dataset.logs = [geminiLog, ...dataset.logs].slice(0, 100);
 
-      const aiResult = await queryGeminiForModelUpdates(apiKey);
+      const aiResult = await queryGeminiForModelUpdates(apiKey, onLog);
       if (aiResult && aiResult.models && Array.isArray(aiResult.models)) {
         for (const rawModel of aiResult.models) {
           const res = processDiscoveredModel(dataset, rawModel, nowIso);
@@ -53,7 +55,7 @@ export async function runCrawlerLogic(triggerSource: string = 'Manual Request'):
           id: 'log-' + (Date.now() + 2),
           timestamp: new Date().toISOString(),
           level: 'SUCCESS',
-          message: `Gemini 3.6 Flash synthesis completed successfully. Ingested ${aiResult.models.length} model specs.`,
+          message: `Gemini 3.6 Flash grounded search completed. Ingested ${aiResult.models.length} model records from ${aiResult.searchSources.length} citations.`,
           source: 'GeminiAIService',
         };
         dataset.logs = [successGeminiLog, ...dataset.logs].slice(0, 100);
@@ -121,7 +123,17 @@ export async function runCrawlerLogic(triggerSource: string = 'Manual Request'):
   };
 }
 
-async function queryGeminiForModelUpdates(apiKey: string): Promise<any> {
+/**
+ * Execution Limit / Timeout Note:
+ * Step A (Google Search Grounding) + Step B (JSON Structuring) run sequentially and take ~8-15 seconds total.
+ * Synchronous Netlify Functions have default execution limits (10s on free tiers, up to 26s).
+ * For heavy production manual triggers or high-latency searches, consider using a Netlify Background Function
+ * (`trigger-crawler-background.ts`) or scheduled cron (`scheduled-crawler.ts`) to ensure calls never risk timing out.
+ */
+async function queryGeminiForModelUpdates(
+  apiKey: string,
+  onLog?: (message: string, level?: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR') => void
+): Promise<{ models: any[]; searchSources: any[] }> {
   const ai = new GoogleGenAI({
     apiKey,
     httpOptions: {
@@ -131,10 +143,50 @@ async function queryGeminiForModelUpdates(apiKey: string): Promise<any> {
     },
   });
 
-  const prompt = `You are an AI model registry benchmark crawler.
-Please provide up-to-date benchmark data on top cutting-edge frontier AI models available in 2025/2026 (including Claude Opus 5, Claude Fable 5, Claude 3.7 Sonnet, Gemini 2.5 Pro, Gemini 2.5 Flash, GPT-4.5, DeepSeek R1, Grok 3, Llama 3.3 70B, Qwen 2.5 Max, etc.).
+  // STEP A: Search step with Google Search grounding enabled
+  if (onLog) {
+    onLog('Searching for latest model releases via Google Search grounding...', 'INFO');
+  }
 
-Return ONLY a valid JSON object with a key "models" containing an array of AI model objects structured as follows:
+  const searchPrompt = `Search for the latest frontier AI model releases, major announcements, and benchmark updates from the last 30 to 90 days.
+Search across major AI research labs including OpenAI (e.g. GPT-4.5, o3, o3-mini), Anthropic (e.g. Claude Opus 5, Claude Fable 5, Claude 3.7 Sonnet), Google (e.g. Gemini 2.5 Pro, Gemini 2.5 Flash), DeepSeek (e.g. DeepSeek R1, DeepSeek V3), xAI (e.g. Grok 3), Meta (e.g. Llama 3.3 70B), Mistral, Alibaba (Qwen 2.5 Max), and other top labs.
+
+Find newly launched or updated models, key features, benchmark scores (MMLU-Pro, HumanEval, MATH-500, GPQA Diamond, SWE-bench Verified, MMMU, Arena ELO), pricing per million tokens, context windows, and latency. Summarize these findings comprehensively.`;
+
+  const searchResponse = await ai.models.generateContent({
+    model: 'gemini-3.6-flash',
+    contents: searchPrompt,
+    config: {
+      tools: [{ googleSearch: {} }],
+    },
+  });
+
+  const rawSearchText = searchResponse.text || '';
+  const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  const searchSources = groundingChunks
+    .map((chunk: any) => (chunk.web ? { title: chunk.web.title, uri: chunk.web.uri } : null))
+    .filter(Boolean);
+
+  // STEP B: Structuring step (JSON schema conversion without search tool)
+  if (onLog) {
+    onLog(
+      `Structuring search results into model records... (Retrieved ${searchSources.length} web search citations)`,
+      'INFO'
+    );
+  }
+
+  const structPrompt = `You are an AI model registry benchmark crawler.
+Below is real-time search intelligence retrieved via Google Search grounding regarding recent AI model releases and benchmark updates:
+
+--- SEARCH RESULTS ---
+${rawSearchText}
+
+--- GROUNDING SOURCES ---
+${JSON.stringify(searchSources)}
+
+Convert these discovered model releases and benchmark updates into a structured JSON payload containing a "models" array of AI model objects.
+
+Return ONLY a valid JSON object structured as follows:
 {
   "models": [
     {
@@ -189,22 +241,32 @@ Return ONLY a valid JSON object with a key "models" containing an array of AI mo
         "throughputTps": 80
       },
       "confidenceScore": 98,
-      "source": "Verified Gemini 3.6 Flash Live Synthesis & Leaderboards"
+      "source": "Verified Gemini 3.6 Flash Grounded Search Synthesis"
     }
   ]
 }
 Ensure accurate inputTypes restricted to valid values: 'Text', 'Image', 'Audio', 'Video', 'PDF'.`;
 
-  const response = await ai.models.generateContent({
+  const structResponse = await ai.models.generateContent({
     model: 'gemini-3.6-flash',
-    contents: prompt,
+    contents: structPrompt,
     config: {
       responseMimeType: 'application/json',
     },
   });
 
-  const text = response.text || '';
-  return JSON.parse(text);
+  const structuredText = structResponse.text || '';
+  let parsed: any = {};
+  try {
+    parsed = JSON.parse(structuredText);
+  } catch (err) {
+    console.error('Failed to parse Gemini structured JSON:', err);
+  }
+
+  return {
+    models: parsed.models || [],
+    searchSources,
+  };
 }
 
 function processDiscoveredModel(dataset: StoredDataset, raw: any, nowIso: string): 'ADDED' | 'UPDATED' | 'UNCHANGED' {

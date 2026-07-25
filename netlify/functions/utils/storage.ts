@@ -31,24 +31,6 @@ export interface StoredDataset {
 // In-memory fallback for local dev when Blobs context is unavailable
 let memoryDataset: StoredDataset | null = null;
 
-// Creates the Blobs store. Prefers Netlify's auto-injected context, but falls
-// back to explicit siteID/token when that auto-injection isn't available in
-// this deploy environment (see MissingBlobsEnvironmentError).
-function getAiMonitorStore() {
-  // Netlify auto-provides SITE_ID (not NETLIFY_SITE_ID) to functions at runtime.
-  const siteID = process.env.SITE_ID;
-  const token = process.env.NETLIFY_BLOBS_TOKEN;
-
-  if (siteID && token) {
-    return getStore({ name: 'aimonitor', consistency: 'strong', siteID, token });
-  }
-
-  console.warn(
-    `Netlify Blobs: falling back to auto-injected context (SITE_ID present: ${!!siteID}, NETLIFY_BLOBS_TOKEN present: ${!!token})`
-  );
-  return getStore({ name: 'aimonitor', consistency: 'strong' });
-}
-
 function getInitialDataset(): StoredDataset {
   return {
     models: INITIAL_MODELS,
@@ -63,14 +45,17 @@ function getInitialDataset(): StoredDataset {
 
 export async function getDataset(): Promise<StoredDataset> {
   try {
-    const store = getAiMonitorStore();
+    const store = getStore({ name: 'aimonitor', consistency: 'strong' });
     const data = (await store.get('dataset', { type: 'json' })) as StoredDataset | null;
     if (data && data.models && Array.isArray(data.models) && data.models.length > 0) {
       memoryDataset = data;
       return data;
     }
   } catch (err: any) {
-    console.warn('Netlify Blobs READ failed:', err?.name, err?.message || err);
+    // Silently fall back to memory dataset when running outside Netlify environment or when Blobs is not configured
+    if (err?.name !== 'MissingBlobsEnvironmentError' && !err?.message?.includes('MissingBlobsEnvironmentError')) {
+      console.warn('Netlify Blobs read failed, using memory fallback:', err?.message || err);
+    }
   }
 
   if (memoryDataset) {
@@ -84,9 +69,11 @@ export async function getDataset(): Promise<StoredDataset> {
 export async function saveDataset(dataset: StoredDataset): Promise<void> {
   memoryDataset = dataset;
   try {
-    const store = getAiMonitorStore();
+    const store = getStore({ name: 'aimonitor', consistency: 'strong' });
     await store.setJSON('dataset', dataset);
   } catch (err: any) {
-    console.warn('Netlify Blobs WRITE failed:', err?.name, err?.message || err);
+    if (err?.name !== 'MissingBlobsEnvironmentError' && !err?.message?.includes('MissingBlobsEnvironmentError')) {
+      console.warn('Netlify Blobs write failed (saved in memory):', err?.message || err);
+    }
   }
 }

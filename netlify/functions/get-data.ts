@@ -7,7 +7,7 @@ export const handler: Handler = async (event) => {
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Content-Type': 'application/json',
-    'Cache-Control': 'no-store, must-revalidate',
+    'Cache-Control': 'no-cache',
   };
 
   if (event.httpMethod === 'OPTIONS') {
