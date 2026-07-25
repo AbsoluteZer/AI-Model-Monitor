@@ -35,13 +35,17 @@ let memoryDataset: StoredDataset | null = null;
 // back to explicit siteID/token when that auto-injection isn't available in
 // this deploy environment (see MissingBlobsEnvironmentError).
 function getAiMonitorStore() {
-  const siteID = process.env.NETLIFY_SITE_ID;
+  // Netlify auto-provides SITE_ID (not NETLIFY_SITE_ID) to functions at runtime.
+  const siteID = process.env.SITE_ID;
   const token = process.env.NETLIFY_BLOBS_TOKEN;
 
   if (siteID && token) {
     return getStore({ name: 'aimonitor', consistency: 'strong', siteID, token });
   }
 
+  console.warn(
+    `Netlify Blobs: falling back to auto-injected context (SITE_ID present: ${!!siteID}, NETLIFY_BLOBS_TOKEN present: ${!!token})`
+  );
   return getStore({ name: 'aimonitor', consistency: 'strong' });
 }
 
