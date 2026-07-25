@@ -52,10 +52,7 @@ export async function getDataset(): Promise<StoredDataset> {
       return data;
     }
   } catch (err: any) {
-    // Silently fall back to memory dataset when running outside Netlify environment or when Blobs is not configured
-    if (err?.name !== 'MissingBlobsEnvironmentError' && !err?.message?.includes('MissingBlobsEnvironmentError')) {
-      console.warn('Netlify Blobs read failed, using memory fallback:', err?.message || err);
-    }
+    console.warn('Netlify Blobs READ failed:', err?.name, err?.message || err);
   }
 
   if (memoryDataset) {
@@ -72,8 +69,6 @@ export async function saveDataset(dataset: StoredDataset): Promise<void> {
     const store = getStore({ name: 'aimonitor', consistency: 'strong' });
     await store.setJSON('dataset', dataset);
   } catch (err: any) {
-    if (err?.name !== 'MissingBlobsEnvironmentError' && !err?.message?.includes('MissingBlobsEnvironmentError')) {
-      console.warn('Netlify Blobs write failed (saved in memory):', err?.message || err);
-    }
+    console.warn('Netlify Blobs WRITE failed:', err?.name, err?.message || err);
   }
 }
