@@ -47,7 +47,7 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'compare', label: 'Compare', icon: Columns3, badge: selectedIds.length },
     { id: 'search', label: 'Directory', icon: Search },
     { id: 'analytics', label: 'Analytics', icon: LineChart },
-    { id: 'admin', label: 'Admin', icon: ShieldCheck },
+    { id: 'admin', label: 'System Monitor', icon: ShieldCheck },
   ];
 
   return (

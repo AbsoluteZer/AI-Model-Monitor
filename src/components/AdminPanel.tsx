@@ -71,12 +71,17 @@ export const AdminPanel: React.FC = () => {
       {/* Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-            <ShieldCheck className="w-6 h-6 text-emerald-500" />
-            <span>Crawler Control & Admin Dashboard</span>
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              <ShieldCheck className="w-6 h-6 text-emerald-500" />
+              <span>Automated Crawler & System Health Monitor</span>
+            </h1>
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 font-bold text-[10px] uppercase tracking-wider">
+              Role-Free Public View
+            </span>
+          </div>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-            Monitor automated background crawlers, review source logs, trigger Gemini AI benchmark sync, and inspect database state
+            Real-time status of 24/7 automated background crawlers, live benchmark sync logs, and database health metrics
           </p>
         </div>
 
@@ -86,7 +91,7 @@ export const AdminPanel: React.FC = () => {
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 disabled:opacity-50 shadow-md transition-all self-start sm:self-auto"
         >
           <RotateCw className={`w-4 h-4 ${isTriggering ? 'animate-spin' : ''}`} />
-          <span>{isTriggering ? 'Crawling Leaderboards & AI Feeds...' : 'Trigger Manual Crawl'}</span>
+          <span>{isTriggering ? 'Crawling Leaderboards & AI Feeds...' : 'Refresh Benchmark Data Now'}</span>
         </button>
       </div>
 

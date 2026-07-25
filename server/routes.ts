@@ -9,7 +9,7 @@ export const apiRouter = Router();
 apiRouter.get('/models', (req: Request, res: Response) => {
   try {
     let models = db.getModels();
-    const query = (req.query.q as string || '').toLowerCase().trim();
+    const rawQuery = (req.query.q as string || '').slice(0, 100).toLowerCase().trim();
     const companyId = req.query.company as string;
     const isOpenWeight = req.query.isOpenWeight === 'true';
     const isApiAvailable = req.query.isApiAvailable === 'true';
@@ -18,17 +18,20 @@ apiRouter.get('/models', (req: Request, res: Response) => {
     const capability = req.query.capability as CapabilityCategory;
     const sortBy = (req.query.sortBy as string) || 'score';
     const sortOrder = req.query.sortOrder === 'asc' ? 'asc' : 'desc';
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 20;
+    const rawPage = parseInt(req.query.page as string) || 1;
+    const rawLimit = parseInt(req.query.limit as string) || 20;
+
+    const page = Math.max(1, Math.min(rawPage, 1000));
+    const limit = Math.max(1, Math.min(rawLimit, 100));
 
     // Filter by Search Query
-    if (query) {
+    if (rawQuery) {
       models = models.filter(
         (m) =>
-          m.name.toLowerCase().includes(query) ||
-          m.companyName.toLowerCase().includes(query) ||
-          m.description.toLowerCase().includes(query) ||
-          m.keyFeatures.some((f) => f.toLowerCase().includes(query))
+          m.name.toLowerCase().includes(rawQuery) ||
+          m.companyName.toLowerCase().includes(rawQuery) ||
+          m.description.toLowerCase().includes(rawQuery) ||
+          m.keyFeatures.some((f) => f.toLowerCase().includes(rawQuery))
       );
     }
 
@@ -267,9 +270,28 @@ apiRouter.get('/weights', (req: Request, res: Response) => {
 
 apiRouter.post('/weights', (req: Request, res: Response) => {
   try {
-    const newWeights = req.body as Partial<ScoringWeights>;
-    const updated = db.updateWeights(newWeights);
-    db.addLog('INFO', 'Scoring weights configuration updated by user.', 'Admin');
+    const body = req.body || {};
+    const sanitizedWeights: Partial<ScoringWeights> = {};
+    const validKeys: (keyof ScoringWeights)[] = [
+      'reasoning',
+      'coding',
+      'mathematics',
+      'vision',
+      'instructionFollowing',
+      'creativeWriting',
+      'longContext',
+      'speed',
+      'costEfficiency',
+    ];
+
+    for (const key of validKeys) {
+      if (typeof body[key] === 'number' && !isNaN(body[key])) {
+        sanitizedWeights[key] = Math.max(0, Math.min(100, Math.round(body[key])));
+      }
+    }
+
+    const updated = db.updateWeights(sanitizedWeights);
+    db.addLog('INFO', 'Scoring weights configuration updated by user session.', 'System');
     res.json({ success: true, weights: updated });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -300,10 +322,10 @@ apiRouter.get('/admin/crawler', (req: Request, res: Response) => {
   }
 });
 
-// POST /api/admin/crawler/trigger - Trigger manual run
+// POST /api/admin/crawler/trigger - Trigger automated on-demand refresh
 apiRouter.post('/admin/crawler/trigger', async (req: Request, res: Response) => {
   try {
-    const result = await crawler.runCrawler('Manual Admin Trigger');
+    const result = await crawler.runCrawler('Automated On-Demand Sync');
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });

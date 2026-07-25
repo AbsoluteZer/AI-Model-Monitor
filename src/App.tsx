@@ -78,7 +78,7 @@ function AppContent() {
             <span>Powered by Gemini AI Studio Engine</span>
             <span>•</span>
             <button onClick={() => setActiveTab('admin')} className="hover:underline">
-              Crawler Admin Panel
+              System Health Monitor
             </button>
           </div>
         </div>
