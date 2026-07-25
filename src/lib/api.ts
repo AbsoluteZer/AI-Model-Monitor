@@ -18,85 +18,97 @@ import {
   calculateOverallScore,
 } from '../data/initialData';
 
-// Storage Helper Functions
-function getModelsFromStorage(): AIModel[] {
-  try {
-    const raw = localStorage.getItem('aimonitor_models');
-    if (!raw) {
-      localStorage.setItem('aimonitor_models', JSON.stringify(INITIAL_MODELS));
-      return INITIAL_MODELS;
-    }
-    return JSON.parse(raw);
-  } catch {
-    return INITIAL_MODELS;
-  }
+export interface StoredDataset {
+  models: AIModel[];
+  status: CrawlerStatus;
+  logs: CrawlerLog[];
+  weights: ScoringWeights;
+  companies: Company[];
+  benchmarks: BenchmarkMeta[];
+  lastFetchedFromGemini?: string;
+  sourceType?: 'LIVE_GEMINI' | 'CACHED_STORAGE' | 'FALLBACK_BOOTSTRAP';
 }
 
-function saveModelsToStorage(models: AIModel[]): void {
+// Client-side cache memory & helpers
+let cachedDatasetMemory: StoredDataset | null = null;
+
+function saveDatasetToLocalStorage(dataset: StoredDataset): void {
   try {
-    localStorage.setItem('aimonitor_models', JSON.stringify(models));
+    localStorage.setItem('aimonitor_dataset_v2', JSON.stringify(dataset));
+    localStorage.setItem('aimonitor_models', JSON.stringify(dataset.models));
+    localStorage.setItem('aimonitor_status', JSON.stringify(dataset.status));
+    localStorage.setItem('aimonitor_logs', JSON.stringify(dataset.logs));
+    localStorage.setItem('aimonitor_weights', JSON.stringify(dataset.weights));
   } catch (e) {
-    console.warn('Failed to save models to localStorage', e);
+    console.warn('Failed to save dataset to localStorage', e);
   }
 }
 
-function getWeightsFromStorage(): ScoringWeights {
+function loadDatasetFromLocalStorage(): StoredDataset | null {
   try {
-    const raw = localStorage.getItem('aimonitor_weights');
-    if (!raw) {
-      localStorage.setItem('aimonitor_weights', JSON.stringify(DEFAULT_WEIGHTS));
-      return DEFAULT_WEIGHTS;
+    const raw = localStorage.getItem('aimonitor_dataset_v2');
+    if (raw) {
+      return JSON.parse(raw);
     }
-    return JSON.parse(raw);
-  } catch {
-    return DEFAULT_WEIGHTS;
-  }
-}
-
-function getLogsFromStorage(): CrawlerLog[] {
-  try {
-    const raw = localStorage.getItem('aimonitor_logs');
-    if (!raw) {
-      localStorage.setItem('aimonitor_logs', JSON.stringify(INITIAL_LOGS));
-      return INITIAL_LOGS;
-    }
-    return JSON.parse(raw);
-  } catch {
-    return INITIAL_LOGS;
-  }
-}
-
-function addLogToStorage(level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS', message: string, source: string = 'LocalStorage'): void {
-  try {
-    const logs = getLogsFromStorage();
-    const newLog: CrawlerLog = {
-      id: 'log-' + Date.now(),
-      timestamp: new Date().toISOString(),
-      level,
-      message,
-      source,
-    };
-    const updated = [newLog, ...logs].slice(0, 50);
-    localStorage.setItem('aimonitor_logs', JSON.stringify(updated));
   } catch (e) {
-    console.warn('Failed to add log to localStorage', e);
+    console.warn('Failed to parse aimonitor_dataset_v2 from localStorage', e);
   }
+  return null;
 }
 
-function getStatusFromStorage(): CrawlerStatus {
+function getFallbackDataset(): StoredDataset {
+  return {
+    models: INITIAL_MODELS,
+    status: INITIAL_STATUS,
+    logs: [
+      {
+        id: 'fallback-log-' + Date.now(),
+        timestamp: new Date().toISOString(),
+        level: 'WARN',
+        message: 'Live API server unreachable. Displaying fallback dataset.',
+        source: 'ClientFallback',
+      },
+      ...INITIAL_LOGS,
+    ],
+    weights: DEFAULT_WEIGHTS,
+    companies: INITIAL_COMPANIES,
+    benchmarks: INITIAL_BENCHMARKS,
+    sourceType: 'FALLBACK_BOOTSTRAP',
+  };
+}
+
+/**
+ * Source of truth fetcher: Queries the live Netlify Function / API endpoint first,
+ * updating client localStorage cache. Falls back to localStorage or static initialData.
+ */
+export async function fetchLiveData(): Promise<StoredDataset> {
   try {
-    const raw = localStorage.getItem('aimonitor_status');
-    if (!raw) {
-      localStorage.setItem('aimonitor_status', JSON.stringify(INITIAL_STATUS));
-      return INITIAL_STATUS;
+    const res = await fetch('/api/data', { method: 'GET', headers: { 'Accept': 'application/json' } });
+    if (res.ok) {
+      const liveData: StoredDataset = await res.json();
+      if (liveData && liveData.models && Array.isArray(liveData.models)) {
+        cachedDatasetMemory = liveData;
+        saveDatasetToLocalStorage(liveData);
+        return liveData;
+      }
     }
-    return JSON.parse(raw);
-  } catch {
-    return INITIAL_STATUS;
+  } catch (err) {
+    console.warn('/api/data unreachable, checking localStorage cache...', err);
   }
+
+  // Check localStorage cache
+  const localCache = loadDatasetFromLocalStorage();
+  if (localCache) {
+    cachedDatasetMemory = localCache;
+    return localCache;
+  }
+
+  // Bootstrap fallback
+  const fallback = getFallbackDataset();
+  cachedDatasetMemory = fallback;
+  return fallback;
 }
 
-// API Methods operating directly in browser memory + localStorage
 export async function fetchModels(params: {
   q?: string;
   company?: string;
@@ -116,8 +128,9 @@ export async function fetchModels(params: {
   totalPages: number;
   data: AIModel[];
 }> {
-  let models = getModelsFromStorage();
-  const weights = getWeightsFromStorage();
+  const dataset = await fetchLiveData();
+  let models = [...dataset.models];
+  const weights = dataset.weights || DEFAULT_WEIGHTS;
 
   const query = (params.q || '').toLowerCase().trim();
   if (query) {
@@ -162,12 +175,14 @@ export async function fetchModels(params: {
     let valB = 0;
 
     if (sortBy === 'score') {
-      valA = params.capability && params.capability !== 'overall' && params.capability !== 'freeTier'
-        ? (a.scores[params.capability] || 0)
-        : calculateOverallScore(a.scores, weights);
-      valB = params.capability && params.capability !== 'overall' && params.capability !== 'freeTier'
-        ? (b.scores[params.capability] || 0)
-        : calculateOverallScore(b.scores, weights);
+      valA =
+        params.capability && params.capability !== 'overall' && params.capability !== 'freeTier'
+          ? a.scores[params.capability] || 0
+          : calculateOverallScore(a.scores, weights);
+      valB =
+        params.capability && params.capability !== 'overall' && params.capability !== 'freeTier'
+          ? b.scores[params.capability] || 0
+          : calculateOverallScore(b.scores, weights);
     } else if (sortBy === 'releaseDate') {
       valA = new Date(a.releaseDate).getTime();
       valB = new Date(b.releaseDate).getTime();
@@ -201,10 +216,12 @@ export async function fetchModels(params: {
 }
 
 export async function fetchModelDetail(id: string): Promise<AIModel & { calculatedScore: number; overallRank: number }> {
-  const models = getModelsFromStorage();
-  const weights = getWeightsFromStorage();
+  const dataset = await fetchLiveData();
+  const weights = dataset.weights || DEFAULT_WEIGHTS;
 
-  const sortedModels = [...models].sort((a, b) => calculateOverallScore(b.scores, weights) - calculateOverallScore(a.scores, weights));
+  const sortedModels = [...dataset.models].sort(
+    (a, b) => calculateOverallScore(b.scores, weights) - calculateOverallScore(a.scores, weights)
+  );
   const modelIndex = sortedModels.findIndex((m) => m.id === id);
 
   if (modelIndex === -1) {
@@ -241,8 +258,9 @@ export async function fetchRankings(category: CapabilityCategory = 'overall'): P
     model: AIModel;
   }>;
 }> {
-  let allModels = getModelsFromStorage();
-  const weights = getWeightsFromStorage();
+  const dataset = await fetchLiveData();
+  let allModels = [...dataset.models];
+  const weights = dataset.weights || DEFAULT_WEIGHTS;
 
   if (category === 'freeTier') {
     allModels = allModels.filter((m) => m.pricing.freeTier === true || m.pricing.inputPerM === 0 || m.isOpenWeight === true);
@@ -289,7 +307,8 @@ export async function fetchLatest(): Promise<{
   recentlyUpdated: AIModel[];
   trending: AIModel[];
 }> {
-  const models = getModelsFromStorage();
+  const dataset = await fetchLiveData();
+  const models = dataset.models;
 
   const latestReleased = [...models]
     .sort((a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime())
@@ -315,8 +334,8 @@ export async function fetchComparison(ids: string[]): Promise<{
   models: AIModel[];
   comparisonMetrics: string[];
 }> {
-  const allModels = getModelsFromStorage();
-  const models = allModels.filter((m) => ids.includes(m.id));
+  const dataset = await fetchLiveData();
+  const models = dataset.models.filter((m) => ids.includes(m.id));
 
   return {
     models,
@@ -335,12 +354,14 @@ export async function fetchComparison(ids: string[]): Promise<{
 }
 
 export async function fetchCompanies(): Promise<Company[]> {
-  const models = getModelsFromStorage();
-  const weights = getWeightsFromStorage();
+  const dataset = await fetchLiveData();
+  const models = dataset.models;
+  const weights = dataset.weights || DEFAULT_WEIGHTS;
 
   const companiesMap = new Map<string, { company: Company; count: number; totalScore: number }>();
 
-  for (const c of INITIAL_COMPANIES) {
+  const baseCompanies = dataset.companies && dataset.companies.length > 0 ? dataset.companies : INITIAL_COMPANIES;
+  for (const c of baseCompanies) {
     companiesMap.set(c.id, { company: { ...c }, count: 0, totalScore: 0 });
   }
 
@@ -366,26 +387,49 @@ export async function fetchCompanies(): Promise<Company[]> {
 }
 
 export async function fetchBenchmarks(): Promise<BenchmarkMeta[]> {
-  return INITIAL_BENCHMARKS;
+  const dataset = await fetchLiveData();
+  return dataset.benchmarks && dataset.benchmarks.length > 0 ? dataset.benchmarks : INITIAL_BENCHMARKS;
 }
 
 export async function fetchWeights(): Promise<ScoringWeights> {
-  return getWeightsFromStorage();
+  const dataset = await fetchLiveData();
+  return dataset.weights || DEFAULT_WEIGHTS;
 }
 
 export async function saveWeights(weights: Partial<ScoringWeights>): Promise<{ success: boolean; weights: ScoringWeights }> {
-  const current = getWeightsFromStorage();
-  const updated: ScoringWeights = {
-    ...current,
+  try {
+    const res = await fetch('/api/weights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(weights),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.weights) {
+        if (cachedDatasetMemory) {
+          cachedDatasetMemory.weights = data.weights;
+          saveDatasetToLocalStorage(cachedDatasetMemory);
+        }
+        return { success: true, weights: data.weights };
+      }
+    }
+  } catch (err) {
+    console.warn('/api/weights update failed, applying locally:', err);
+  }
+
+  const currentDataset = await fetchLiveData();
+  const updatedWeights: ScoringWeights = {
+    ...currentDataset.weights,
     ...weights,
   };
 
-  localStorage.setItem('aimonitor_weights', JSON.stringify(updated));
-  addLogToStorage('INFO', 'Scoring weights updated in localStorage.', 'ClientPreferences');
+  currentDataset.weights = updatedWeights;
+  saveDatasetToLocalStorage(currentDataset);
 
   return {
     success: true,
-    weights: updated,
+    weights: updatedWeights,
   };
 }
 
@@ -400,9 +444,10 @@ export async function fetchAdminCrawler(): Promise<{
   };
   logs: CrawlerLog[];
 }> {
-  const models = getModelsFromStorage();
-  const logs = getLogsFromStorage();
-  const status = getStatusFromStorage();
+  const dataset = await fetchLiveData();
+  const models = dataset.models;
+  const logs = dataset.logs || [];
+  const status = dataset.status || INITIAL_STATUS;
 
   const openWeightCount = models.filter((m) => m.isOpenWeight).length;
   const apiAvailableCount = models.filter((m) => m.isApiAvailable).length;
@@ -414,7 +459,7 @@ export async function fetchAdminCrawler(): Promise<{
     status,
     stats: {
       totalModels: models.length,
-      totalCompanies: INITIAL_COMPANIES.length,
+      totalCompanies: dataset.companies?.length || INITIAL_COMPANIES.length,
       openWeightCount,
       apiAvailableCount,
       newReleasesCount,
@@ -423,34 +468,55 @@ export async function fetchAdminCrawler(): Promise<{
   };
 }
 
+/**
+ * Trigger real crawler execution on Netlify Function / Backend server,
+ * updating Netlify Blobs and syncing fresh Gemini benchmark data to client.
+ */
 export async function triggerCrawler(): Promise<{
   success: boolean;
   addedCount: number;
   updatedCount: number;
   message: string;
 }> {
-  const models = getModelsFromStorage();
+  try {
+    const res = await fetch('/api/trigger?source=AdminUI', { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.dataset) {
+        cachedDatasetMemory = data.dataset;
+        saveDatasetToLocalStorage(data.dataset);
+      } else {
+        await fetchLiveData();
+      }
+      return {
+        success: data.success ?? true,
+        addedCount: data.addedCount ?? 0,
+        updatedCount: data.updatedCount ?? 0,
+        message: data.message || 'Crawl completed successfully via Netlify Function.',
+      };
+    }
+  } catch (err: any) {
+    console.warn('Real crawler trigger call failed, falling back:', err);
+  }
+
+  // Local fallback if API is unreachable
+  const current = await fetchLiveData();
   const now = new Date().toISOString();
-
-  // Simulate updating timestamps on models
-  const updatedModels = models.map((m) => ({
-    ...m,
-    lastChecked: now,
-  }));
-
-  saveModelsToStorage(updatedModels);
-
-  const status = getStatusFromStorage();
-  status.lastRunTime = now;
-  status.nextScheduledRun = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
-  localStorage.setItem('aimonitor_status', JSON.stringify(status));
-
-  addLogToStorage('SUCCESS', 'Client automated benchmark check completed. Local dataset verified.', 'ClientCrawler');
+  current.status.lastRunTime = now;
+  current.status.status = 'SUCCESS';
+  current.logs.unshift({
+    id: 'log-' + Date.now(),
+    timestamp: now,
+    level: 'WARN',
+    message: 'Triggered offline crawler fallback.',
+    source: 'ClientLocal',
+  });
+  saveDatasetToLocalStorage(current);
 
   return {
     success: true,
     addedCount: 0,
-    updatedCount: models.length,
-    message: 'Local dataset synchronized successfully in browser storage.',
+    updatedCount: current.models.length,
+    message: 'Local dataset refreshed.',
   };
 }

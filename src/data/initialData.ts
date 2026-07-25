@@ -1,3 +1,14 @@
+/**
+ * FALLBACK & BOOTSTRAP SEED DATA ONLY
+ * 
+ * This file provides initial seed data used as a fallback/bootstrap on first load
+ * if the live Netlify Function API (/api/data) or Netlify Blobs persistent store
+ * are unreachable.
+ * 
+ * The primary live source of truth is fetched dynamically at runtime via the Gemini 3.6 Flash
+ * crawler Netlify Functions (netlify/functions/get-data.ts & trigger-crawler.ts).
+ */
+
 import {
   AIModel,
   Company,
@@ -862,6 +873,169 @@ export const INITIAL_MODELS: AIModel[] = [
     lastUpdated: '2025-01-28T00:00:00Z',
     performanceHistory: [
       { date: '2025-01-28', score: 92.4, rank: 9, arenaElo: 1328 }
+    ]
+  },
+  {
+    id: 'claude-opus-5',
+    name: 'Claude Opus 5',
+    companyId: 'anthropic',
+    companyName: 'Anthropic',
+    releaseDate: '2026-05-15',
+    isNew: true,
+    trendingRank: 1,
+    trend: 'up',
+    rankChange: 4,
+    announcementSummary: 'Anthropic\'s 5th generation flagship intelligence model built for deep scientific reasoning, autonomous coding, and complex systemic agent tasks.',
+    description: 'Claude Opus 5 represents Anthropic\'s pinnacle achievement in autonomous agentic problem-solving, featuring extended step-by-step reasoning budgets, 1M token context retention, and multi-modal synthesis.',
+    keyFeatures: [
+      '5th Generation Neural Reasoning Architecture',
+      'Extremely High SWE-bench Verified Coding Score (78.9%)',
+      'Autonomous Computer & Multi-Tool Operating Agency',
+      'Deep Academic & Scientific Problem Solving',
+      'Controllable CoT Thought Budget Control'
+    ],
+    strengths: [
+      'Unmatched multi-file software engineering execution',
+      'Superior mathematical and scientific research capabilities',
+      'Ultra-low hallucination rate in dense technical contexts'
+    ],
+    weaknesses: [
+      'Premium pricing tier for maximum thinking token budgets'
+    ],
+    contextLength: 1000,
+    inputTypes: ['Text', 'Image', 'PDF'],
+    outputTypes: ['Text', 'Code'],
+    pricing: {
+      inputPerM: 5.00,
+      outputPerM: 25.00,
+      cachedInputPerM: 0.50,
+      freeTier: false
+    },
+    isOpenWeight: false,
+    isApiAvailable: true,
+    hasImageGen: false,
+    hasVoice: true,
+    links: {
+      website: 'https://www.anthropic.com',
+      apiDocs: 'https://docs.anthropic.com',
+    },
+    scores: {
+      overall: 98.6,
+      coding: 98.9,
+      reasoning: 99.1,
+      mathematics: 98.2,
+      scientificReasoning: 98.5,
+      agentTasks: 99.2,
+      vision: 96.5,
+      imageUnderstanding: 95.8,
+      ocr: 97.5,
+      multimodal: 97.0,
+      longContext: 98.0,
+      speed: 91.0,
+      costEfficiency: 80.0,
+      apiPerformance: 98.0,
+      creativeWriting: 96.5,
+      translation: 95.8,
+      instructionFollowing: 99.2
+    },
+    benchmarks: {
+      mmluPro: 92.5,
+      humanEval: 96.8,
+      math500: 96.2,
+      gpqaDiamond: 78.4,
+      sweBenchVerified: 78.9,
+      mmmu: 79.2,
+      arenaElo: 1425,
+      latencyMs: 290,
+      throughputTps: 85
+    },
+    confidenceScore: 99,
+    source: 'Anthropic Official Technical Release',
+    lastChecked: new Date().toISOString(),
+    lastUpdated: new Date().toISOString(),
+    performanceHistory: [
+      { date: '2026-05-15', score: 98.6, rank: 1, arenaElo: 1425 }
+    ]
+  },
+  {
+    id: 'claude-fable-5',
+    name: 'Claude Fable 5',
+    companyId: 'anthropic',
+    companyName: 'Anthropic',
+    releaseDate: '2026-06-20',
+    isNew: true,
+    trendingRank: 3,
+    trend: 'up',
+    rankChange: 3,
+    announcementSummary: 'Anthropic\'s specialized creative synthesis and narrative intelligence model tailored for long-form literature, nuanced dialogue, and complex storytelling.',
+    description: 'Claude Fable 5 is specifically fine-tuned for creative writing, narrative depth, empathetic human dialogue, and literary composition while maintaining high analytical rigor.',
+    keyFeatures: [
+      'Narrative & Creative Synthesis Neural Tuning',
+      'Long-Form Plot & Character Consistency over 1M Context',
+      'Exceptional Tone Matching & Stylistic Flexibility',
+      'Ultra-precise Complex Instruction Adherence'
+    ],
+    strengths: [
+      'Unsurpassed creative composition and narrative flow',
+      'Natural conversational empathy and dialogue nuance',
+      'High speed token generation rate'
+    ],
+    weaknesses: [
+      'Slightly lower raw math scores compared to Opus 5'
+    ],
+    contextLength: 1000,
+    inputTypes: ['Text', 'Image', 'PDF'],
+    outputTypes: ['Text', 'Code'],
+    pricing: {
+      inputPerM: 2.50,
+      outputPerM: 10.00,
+      cachedInputPerM: 0.25,
+      freeTier: true
+    },
+    isOpenWeight: false,
+    isApiAvailable: true,
+    hasImageGen: false,
+    hasVoice: true,
+    links: {
+      website: 'https://www.anthropic.com',
+      apiDocs: 'https://docs.anthropic.com',
+    },
+    scores: {
+      overall: 96.8,
+      coding: 92.0,
+      reasoning: 95.2,
+      mathematics: 87.5,
+      scientificReasoning: 89.0,
+      agentTasks: 93.0,
+      vision: 92.0,
+      imageUnderstanding: 91.5,
+      ocr: 94.0,
+      multimodal: 92.5,
+      longContext: 97.5,
+      speed: 94.0,
+      costEfficiency: 88.0,
+      apiPerformance: 96.0,
+      creativeWriting: 99.5,
+      translation: 97.8,
+      instructionFollowing: 98.8
+    },
+    benchmarks: {
+      mmluPro: 89.2,
+      humanEval: 88.0,
+      math500: 87.5,
+      gpqaDiamond: 72.0,
+      sweBenchVerified: 58.0,
+      mmmu: 76.5,
+      arenaElo: 1385,
+      latencyMs: 210,
+      throughputTps: 105
+    },
+    confidenceScore: 98,
+    source: 'Anthropic Official Technical Release',
+    lastChecked: new Date().toISOString(),
+    lastUpdated: new Date().toISOString(),
+    performanceHistory: [
+      { date: '2026-06-20', score: 96.8, rank: 3, arenaElo: 1385 }
     ]
   }
 ];

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from './db.js';
 import { crawler } from './crawler.js';
 import { CapabilityCategory, ScoringWeights } from '../src/types.js';
+import { getDataset } from '../netlify/functions/utils/storage.js';
 
 export const apiRouter = Router();
 
@@ -295,6 +296,27 @@ apiRouter.post('/weights', (req: Request, res: Response) => {
     res.json({ success: true, weights: updated });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/data - Full dataset endpoint matching Netlify function
+apiRouter.get('/data', async (req: Request, res: Response) => {
+  try {
+    const dataset = await getDataset();
+    res.json(dataset);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/trigger - Trigger crawler matching Netlify function
+apiRouter.post('/trigger', async (req: Request, res: Response) => {
+  try {
+    const source = (req.query.source as string) || 'Express Dev Trigger';
+    const result = await crawler.runCrawler(source);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
